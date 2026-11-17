@@ -1,0 +1,64 @@
+# Cada vez que se sube un archivo de ventas (.XLS) al repositorio, genera su versión en CSV y la
+# publica en la rama "datos-csv". La app puede leer ese CSV por partes y con mucha menos memoria
+# (importante en iPhone). El .XLS original no se toca.
+#
+# Enlace resultante (ejemplo):
+#   https://raw.githubusercontent.com/<organizacion>/<repositorio>/datos-csv/VENTAS%20MES%20EN%20CURSO.csv
+#
+# Va en:  .github/workflows/convertir-ventas-a-csv.yml   (junto con .github/scripts/convertir.js)
+name: Convertir ventas XLS a CSV
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'VENTAS*.XLS'
+      - 'VENTAS*.xls'
+      - 'VENTAS*.xlsx'
+      - '.github/scripts/convertir.js'
+      - '.github/workflows/convertir-ventas-a-csv.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Si se suben dos archivos seguidos, solo importa el último.
+concurrency:
+  group: convertir-ventas
+  cancel-in-progress: true
+
+jobs:
+  convertir:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Misma versión del lector de Excel que usa la app (0.18.5), para que las filas salgan iguales.
+      - name: Instalar lector de Excel
+        run: npm install --no-save --no-audit --no-fund xlsx@0.18.5
+
+      # Si algo no cuadra (sin filas, sin columnas esperadas), este paso falla y NO se publica nada:
+      # el CSV anterior se queda como estaba.
+      - name: Convertir a CSV
+        run: node .github/scripts/convertir.js . salida
+
+      # La rama datos-csv se reescribe con un solo commit cada vez: no crece el historial del repositorio.
+      - name: Publicar en la rama datos-csv
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd salida
+          git init -q -b datos-csv
+          git config core.autocrlf false
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "CSV generado desde ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" datos-csv
